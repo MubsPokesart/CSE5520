@@ -1,13 +1,16 @@
+import datetime
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from datetime import datetime
 import scipy.stats as stats
-from typing import List, Dict, Tuple
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from sklearn.preprocessing import StandardScaler
+from sklearn.mixture import GaussianMixture
+from matplotlib.patches import Ellipse
 
 START_DATE = "2009-10-27" # First day filtering
 END_DATE = "2019-10-22" # Last day filtering
-
 
 class TeamObject:
     # Static season dates dictionary
@@ -105,7 +108,6 @@ class TeamObject:
                 seasons_games.append(season_dict)
         
         return seasons_games
-
 # Teams in NBA based on dataset
 WESTERN_CONFERENCE_TEAMS = {'Portland Trail Blazers', 'Los Angeles Lakers', 'Dallas Mavericks', 'Golden State Warriors', 'Denver Nuggets', 'Los Angeles Clippers', 'San Antonio Spurs', 'Minnesota Timberwolves', 'Memphis Grizzlies', 'New Orleans Hornets', 'Phoenix Suns', 'Oklahoma City Thunder', 'Utah Jazz', 'Houston Rockets', 'Sacramento Kings', 'LA Clippers', 'New Orleans Pelicans'}
 EASTERN_CONFERENCE_TEAMS = {'Cleveland Cavaliers', 'Atlanta Hawks', 'Miami Heat', 'Boston Celtics',  'Orlando Magic', 'Toronto Raptors', 'Chicago Bulls', 'New Jersey Nets', 'Detroit Pistons', 'Charlotte Bobcats', 'Philadelphia 76ers', 'Indiana Pacers', 'Washington Wizards', 'New York Knicks', 'Milwaukee Bucks', 'Brooklyn Nets', 'Charlotte Hornets'}
@@ -225,313 +227,243 @@ for team in team_objects:
 
 # Add relative net rating to each season
 for season, teams_data in seasons_dict.items():
-    net_ratings = [team_data['average_net_rating'] for team_data in teams_data]
-    mean_net_rating = np.mean(net_ratings)
+    mean_net_rating = np.mean([team_data['average_net_rating'] for team_data in teams_data])
+    mean_offensive_rating = np.mean([team_data['average_offensive_rating'] for team_data in teams_data])
+    mean_defensive_rating = np.mean([team_data['average_defensive_rating'] for team_data in teams_data])
     
     for team_data in teams_data:
         team_data['relative_net_rating'] = team_data['average_net_rating'] - mean_net_rating
+        team_data['relative_offensive_rating'] = team_data['average_offensive_rating'] - mean_offensive_rating
+        team_data['relative_defensive_rating'] = team_data['average_defensive_rating'] - mean_defensive_rating
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
-from statsmodels.tsa.arima.model import ARIMA
-import scipy.stats as stats
-
-# Prepare the data
-seasons_data = {
-    '2009-10': [team for team in seasons_dict['2009-10']],
-    '2010-11': [team for team in seasons_dict['2010-11']],
-    '2011-12': [team for team in seasons_dict['2011-12']],
-    '2012-13': [team for team in seasons_dict['2012-13']],
-    '2013-14': [team for team in seasons_dict['2013-14']],
-    '2014-15': [team for team in seasons_dict['2014-15']],
-    '2015-16': [team for team in seasons_dict['2015-16']],
-    '2016-17': [team for team in seasons_dict['2016-17']],
-    '2017-18': [team for team in seasons_dict['2017-18']],
-    '2018-19': [team for team in seasons_dict['2018-19']]
-}
-
-# 1. Conference-level Statistical Analysis
-def conference_statistical_analysis(metric):
-    """
-    Perform statistical analysis comparing Eastern and Western conferences
+# Create violin plots
+def create_net_rating_violin_plots(seasons_dict):
+    # Prepare data for plotting
+    plot_data = []
+    for season, teams in seasons_dict.items():
+        for team in teams:
+            plot_data.append({
+                'Season': season,
+                'Conference': team['conference'],
+                'Net Rating': team['average_net_rating']
+            })
     
-    Args:
-    metric (str): The performance metric to analyze
+    # Convert to DataFrame
+    df = pd.DataFrame(plot_data)
     
-    Returns:
-    dict: Statistical test results
-    """
-    results = {}
+    # Create a figure with subplots
+    plt.figure(figsize=(20, 15))
     
-    for season, teams in seasons_data.items():
-        # Separate Eastern and Western conference data
-        eastern_teams = [team[metric] for team in teams if team['conference'] == 'Eastern']
-        western_teams = [team[metric] for team in teams if team['conference'] == 'Western']
+    # Iterate through each season and create a subplot
+    for i, season in enumerate(sorted(seasons_dict.keys()), 1):
+        plt.subplot(3, 4, i)
         
-        # Perform independent t-test
-        t_stat, p_value = stats.ttest_ind(western_teams, eastern_teams)
+        # Filter data for current season
+        season_data = df[df['Season'] == season]
         
-        results[season] = {
-            't_statistic': t_stat,
-            'p_value': p_value,
-            'western_mean': np.mean(western_teams),
-            'eastern_mean': np.mean(eastern_teams)
-        }
-    
-    return results
-
-# Perform analysis for different metrics
-offensive_rating_analysis = conference_statistical_analysis('average_offensive_rating')
-defensive_rating_analysis = conference_statistical_analysis('average_defensive_rating')
-net_rating_analysis = conference_statistical_analysis('average_net_rating')
-
-# 2. ARIMA Time Series Analysis
-def prepare_conference_timeseries(metric):
-    """
-    Prepare time series data for ARIMA analysis
-    
-    Args:
-    metric (str): The performance metric to analyze
-    
-    Returns:
-    tuple: Western and Eastern conference time series
-    """
-    western_series = [np.mean([team[metric] for team in seasons_data[season] if team['conference'] == 'Western']) 
-                      for season in sorted(seasons_data.keys())]
-    eastern_series = [np.mean([team[metric] for team in seasons_data[season] if team['conference'] == 'Eastern']) 
-                      for season in sorted(seasons_data.keys())]
-    
-    return western_series, eastern_series
-
-def arima_analysis(series):
-    """
-    Perform ARIMA analysis on a time series
-    
-    Args:
-    series (list): Time series data
-    
-    Returns:
-    dict: ARIMA model results
-    """
-    # Fit ARIMA model
-    model = ARIMA(series, order=(1,1,1))
-    results = model.fit()
-    
-    return {
-        'coefficients': results.params,
-        'p_values': results.pvalues,
-        'trend': results.forecast(steps=1)[0]
-    }
-
-# Perform ARIMA analysis for different metrics
-offensive_rating_arima = {
-    'Western': arima_analysis(prepare_conference_timeseries('average_offensive_rating')[0]),
-    'Eastern': arima_analysis(prepare_conference_timeseries('average_offensive_rating')[1])
-}
-
-net_rating_arima = {
-    'Western': arima_analysis(prepare_conference_timeseries('average_net_rating')[0]),
-    'Eastern': arima_analysis(prepare_conference_timeseries('average_net_rating')[1])
-}
-
-# 3. K-means Clustering
-def perform_kmeans_clustering(metric):
-    """
-    Perform K-means clustering on team performance
-    
-    Args:
-    metric (str): The performance metric to analyze
-    
-    Returns:
-    dict: Clustering results
-    """
-    # Prepare data for clustering
-    cluster_data = []
-    team_names = []
-    conferences = []
-    
-    for season in seasons_data.keys():
-        for team in seasons_data[season]:
-            cluster_data.append([
-                team['average_offensive_rating'],
-                team['average_defensive_rating'],
-                team['average_net_rating']
-            ])
-            team_names.append(f"{season} {team['team']}")
-            conferences.append(team['conference'])
-    
-    # Standardize the data
-    scaler = StandardScaler()
-    scaled_data = scaler.fit_transform(cluster_data)
-    
-    # Perform K-means clustering
-    kmeans = KMeans(n_clusters=4, random_state=42)
-    clusters = kmeans.fit_predict(scaled_data)
-    
-    # Analyze cluster composition
-    cluster_composition = {}
-    for i in range(4):
-        cluster_composition[i] = {
-            'total_teams': sum(clusters == i),
-            'western_teams': sum((clusters == i) & (np.array(conferences) == 'Western')),
-            'eastern_teams': sum((clusters == i) & (np.array(conferences) == 'Eastern')),
-            'cluster_center': kmeans.cluster_centers_[i]
-        }
-    
-    return {
-        'clusters': clusters,
-        'team_names': team_names,
-        'conferences': conferences,
-        'cluster_composition': cluster_composition
-    }
-
-# Perform K-means clustering
-kmeans_results = perform_kmeans_clustering('average_net_rating')
-
-# Visualization and Summary
-def generate_summary():
-    """
-    Generate a comprehensive summary of the analysis
-    """
-    summary = "NBA Conference Performance Analysis (2009-2019)\n\n"
-    
-    # Statistical Significance Summary
-    summary += "1. Statistical Significance Analysis:\n"
-    for metric, analysis in [
-        ('Offensive Rating', offensive_rating_analysis),
-        ('Defensive Rating', defensive_rating_analysis),
-        ('Net Rating', net_rating_analysis)
-    ]:
-        summary += f"   {metric} Comparison:\n"
-        significant_seasons = [
-            season for season, result in analysis.items() 
-            if result['p_value'] < 0.05
-        ]
-        summary += f"   - Statistically significant seasons: {significant_seasons}\n"
-        summary += f"   - Seasons with Western Conference advantage:\n"
-        for season, result in analysis.items():
-            if result['western_mean'] > result['eastern_mean']:
-                summary += f"     * {season}: West mean = {result['western_mean']:.2f}, East mean = {result['eastern_mean']:.2f}\n"
-    
-    # ARIMA Trend Summary
-    summary += "\n2. ARIMA Time Series Trends:\n"
-    for metric, arima_results in [
-        ('Offensive Rating', offensive_rating_arima),
-        ('Net Rating', net_rating_arima)
-    ]:
-        summary += f"   {metric} Trend:\n"
-        for conference, results in arima_results.items():
-            summary += f"   - {conference} Conference:\n"
-            summary += f"     * Forecast trend: {results['trend']:.2f}\n"
-    
-    # K-means Clustering Summary
-    summary += "\n3. K-means Clustering Insights:\n"
-    for cluster, composition in kmeans_results['cluster_composition'].items():
-        summary += f"   Cluster {cluster}:\n"
-        summary += f"   - Total Teams: {composition['total_teams']}\n"
-        summary += f"   - Western Teams: {composition['western_teams']}\n"
-        summary += f"   - Eastern Teams: {composition['eastern_teams']}\n"
-    
-    return summary
-
-# Generate and print the summary
-analysis_summary = generate_summary()
-print(analysis_summary)
-
-def create_visualizations(seasons_data, kmeans_results):
-    """
-    Create visualizations to support the analysis
-    
-    Args:
-    seasons_data (dict): Dictionary of seasons and their team data
-    kmeans_results (dict): Results from K-means clustering
-    """
-    # Conference Comparison Boxplot
-    plt.figure(figsize=(15,8))
-    conference_data = []
-    labels = []
-    
-    for season in sorted(seasons_data.keys()):
-        western_ratings = [team['average_net_rating'] for team in seasons_data[season] if team['conference'] == 'Western']
-        eastern_ratings = [team['average_net_rating'] for team in seasons_data[season] if team['conference'] == 'Eastern']
+        # Create violin plot
+        sns.violinplot(x='Conference', y='Net Rating', data=season_data)
         
-        conference_data.extend([western_ratings, eastern_ratings])
-        labels.extend([f'{season} West', f'{season} East'])
+        plt.title(f'Net Ratings - {season} Season')
+        plt.xlabel('Conference')
+        plt.ylabel('Net Rating')
+        plt.axhline(y=0, color='r', linestyle='--')
     
-    plt.boxplot(conference_data, tick_labels=labels)
-    plt.title('Net Rating by Conference and Season', fontsize=16)
-    plt.xticks(rotation=45, ha='right')
-    plt.ylabel('Net Rating')
+    # Adjust layout and save
     plt.tight_layout()
+    plt.suptitle('NBA Net Ratings by Conference (2009-2019)', fontsize=16, y=1.02)
+    plt.savefig('nba_net_ratings_violin_plots.png', dpi=300, bbox_inches='tight')
     plt.show()
+    plt.close()
+
+# Run the plot generation
+create_net_rating_violin_plots(seasons_dict)
+
+def draw_ellipse(position, covariance, ax=None, **kwargs):
+    ax = ax or plt.gca()
+    if covariance.shape == (2, 2):
+        U, s, Vt = np.linalg.svd(covariance)
+        angle = np.degrees(np.arctan2(U[1, 0], U[0, 0]))
+        width, height = 2 * np.sqrt(s)
+    else:
+        angle = 0
+        width, height = 2 * np.sqrt(covariance)
     
-    # Scatter plot for K-means Clustering
-    plt.figure(figsize=(12,8))
+    # Extract color from kwargs
+    color = kwargs.pop('color', None)
     
-    # Prepare data for scatter plot
-    cluster_data = np.array([
-        [team['average_offensive_rating'], 
-         team['average_defensive_rating'], 
-         team['average_net_rating']] 
-        for season in seasons_data.values() 
-        for team in season
-    ])
+    for nsig in range(1, 4):
+        ellipse = Ellipse(
+            xy=position, 
+            width=nsig * width, 
+            height=nsig * height, 
+            angle=angle,
+            # Set color directly in Ellipse constructor
+            color=color,
+            # Apply any remaining kwargs
+            **kwargs
+        )
+        
+        ax.add_patch(ellipse)
+        
+def perform_gmm_clustering(seasons_dict):
+    # Aggregate data across all seasons
+    all_teams_data = []
+    for season, teams in seasons_dict.items():
+        # Add season information to each team
+        for team in teams:
+            team_data = team.copy()
+            team_data['team'] = season + ' ' + team['team']
+            all_teams_data.append(team_data)
     
-    # Use StandardScaler if you want to normalize the data
-    from sklearn.preprocessing import StandardScaler
+    # Convert to DataFrame
+    df = pd.DataFrame(all_teams_data)
+    
+    # Prepare data for clustering
+    X = df[['relative_offensive_rating', 'relative_defensive_rating']].copy()
+    
+    # Invert defensive rating (as lower is better for defense)
+    X['relative_defensive_rating'] = -X['relative_defensive_rating']
+    
+    # Standardize the features
     scaler = StandardScaler()
-    scaled_data = scaler.fit_transform(cluster_data)
+    X_scaled = scaler.fit_transform(X)
     
-    # Perform K-means again to get consistent results
-    from sklearn.cluster import KMeans
-    kmeans = KMeans(n_clusters=4, random_state=42)
-    clusters = kmeans.fit_predict(scaled_data)
+    # Perform GMM clustering with more robust model selection
+    n_components_range = range(1, 7)
+    models = [GaussianMixture(n_components=n, random_state=42).fit(X_scaled) for n in n_components_range]
     
-    # Create scatter plot
-    scatter = plt.scatter(
-        scaled_data[:, 0],  # Offensive Rating
-        scaled_data[:, 1],  # Defensive Rating
-        c=clusters,
-        cmap='viridis',
-        alpha=0.7
+    # Calculate BIC and AIC
+    bic = [model.bic(X_scaled) for model in models]
+    aic = [model.aic(X_scaled) for model in models]
+    
+    # Select optimal number of clusters
+    optimal_clusters_bic = n_components_range[np.argmin(bic)]
+    optimal_clusters_aic = n_components_range[np.argmin(aic)]
+    
+    # Fit final GMM with BIC-selected clusters
+    gmm = GaussianMixture(n_components=optimal_clusters_bic, random_state=42)
+    gmm.fit(X_scaled)
+    
+    # Predict cluster labels
+    labels = gmm.predict(X_scaled)
+    
+    # Create visualization
+    plt.figure(figsize=(16, 10))
+    
+    # Color and marker mapping
+    color_map = {'Western': 'blue', 'Eastern': 'red'}
+    
+    # Improved scatter plot with cluster coloring
+    for cluster in range(optimal_clusters_bic):
+        cluster_mask = (labels == cluster)
+        cluster_data = X[cluster_mask]
+        cluster_df = df[cluster_mask]
+        
+        plt.scatter(
+            cluster_data['relative_offensive_rating'], 
+            cluster_data['relative_defensive_rating'],
+            c=[color_map[conf] for conf in cluster_df['conference']],
+            marker='o',
+            alpha=0.7,
+            label=f'Cluster {cluster}',
+            edgecolors='black',
+            linewidth=1
+        )
+    
+    # Add team labels
+    for i in range(len(X)):
+        plt.annotate(
+            df.iloc[i]['team'], 
+            (X.iloc[i]['relative_offensive_rating'], X.iloc[i]['relative_defensive_rating']),
+            xytext=(5, 5),
+            textcoords='offset points',
+            fontsize=8,
+            alpha=0.7
+        )
+    
+    
+    # Plot cluster centers
+    cluster_centers = scaler.inverse_transform(gmm.means_)
+    colors = cm.rainbow(np.linspace(0, 1, optimal_clusters_bic))
+    
+    # In your plotting loop:
+    for i, (mean, covar) in enumerate(zip(gmm.means_, gmm.covariances_)):
+        if covar.shape == (2, 2):
+            draw_ellipse(mean, covar, alpha=0.2, color=colors[i])
+    
+    plt.scatter(
+        cluster_centers[:, 0], 
+        -cluster_centers[:, 1],  
+        c='green', 
+        s=300, 
+        alpha=0.8, 
+        marker='x',
+        label='Cluster Centers',
+        linewidth=2,
+        edgecolors='black'
     )
     
-    plt.title('Team Performance Clusters', fontsize=16)
-    plt.xlabel('Standardized Offensive Rating', fontsize=12)
-    plt.ylabel('Standardized Defensive Rating', fontsize=12)
-    plt.colorbar(scatter, label='Cluster')
+    plt.title(f'NBA Teams Clustering\nGMM with {optimal_clusters_bic} Clusters (BIC)', fontsize=16)
+    plt.xlabel('Offensive Rating', fontsize=12)
+    plt.ylabel('Defensive Rating (Inverted)', fontsize=12)
+    plt.legend(title='Clusters', loc='best')
+    plt.grid(True, linestyle='--', alpha=0.5)
+    
     plt.tight_layout()
+    plt.savefig('nba_gmm_clustering.png', dpi=300, bbox_inches='tight')
     plt.show()
+    plt.close()
     
-    # Additional: Conference Performance Over Time
-    plt.figure(figsize=(15,8))
+    # Detailed cluster analysis
+    print(f"Optimal number of clusters (BIC): {optimal_clusters_bic}")
+    print(f"Optimal number of clusters (AIC): {optimal_clusters_aic}")
     
-    # Prepare data for line plot
-    western_net_ratings = [
-        np.mean([team['average_net_rating'] for team in seasons_data[season] if team['conference'] == 'Western'])
-        for season in sorted(seasons_data.keys())
-    ]
-    eastern_net_ratings = [
-        np.mean([team['average_net_rating'] for team in seasons_data[season] if team['conference'] == 'Eastern'])
-        for season in sorted(seasons_data.keys())
-    ]
+    print("\nDetailed Cluster Centers:")
+    for i, center in enumerate(cluster_centers):
+        cluster_teams = df[labels == i]
+        print(f"\nCluster {i}:")
+        print(f"  Center - Offensive Rating: {center[0]:.2f}, Defensive Rating: {-center[1]:.2f}")
+        print("  Teams:")
+        for _, team in cluster_teams.iterrows():
+            print(f"    {team['team']} ({team['conference']} Conference)")
+        print(f"  Cluster Size: {len(cluster_teams)} teams")
     
-    plt.plot(sorted(seasons_data.keys()), western_net_ratings, marker='o', label='Western Conference')
-    plt.plot(sorted(seasons_data.keys()), eastern_net_ratings, marker='o', label='Eastern Conference')
-    
-    plt.title('Conference Net Rating Trends', fontsize=16)
-    plt.xlabel('Season', fontsize=12)
-    plt.ylabel('Average Net Rating', fontsize=12)
-    plt.legend()
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    plt.show()
+    # Return additional information
+    return {
+        'labels': labels,
+        'centers': cluster_centers,
+        'optimal_clusters_bic': optimal_clusters_bic,
+        'optimal_clusters_aic': optimal_clusters_aic
+    }
 
-# Example usage (commented out as it requires the original context)
-create_visualizations(seasons_data, kmeans_results)
+# Assuming seasons_dict is already defined
+# Run the clustering analysis
+cluster_results = perform_gmm_clustering(seasons_dict)
 
-print("Visualization function updated and ready to use.")
+# Perform t-tests for each season and metric
+p_values = {}
+for season, teams_data in seasons_dict.items():
+    west_data = [team for team in teams_data if team['conference'] == 'Western']
+    east_data = [team for team in teams_data if team['conference'] == 'Eastern']
+    
+    p_values[season] = {
+        'Net Rating': stats.ttest_ind([team['average_net_rating'] for team in west_data],
+                                      [team['average_net_rating'] for team in east_data]).pvalue,
+        'Offensive Rating': stats.ttest_ind([team['average_offensive_rating'] for team in west_data],
+                                            [team['average_offensive_rating'] for team in east_data]).pvalue,
+        'Defensive Rating': stats.ttest_ind([team['average_defensive_rating'] for team in west_data],
+                                            [team['average_defensive_rating'] for team in east_data]).pvalue
+    }
+
+# Create a DataFrame from p_values
+p_value_df = pd.DataFrame(p_values).T
+
+# Create a heatmap of p-values
+plt.figure(figsize=(12, 6))
+sns.heatmap(p_value_df, cmap='YlOrRd_r', annot=True, fmt='.3f', 
+            cbar_kws={'label': 'p-value'})
+plt.title('Statistical Significance of Conference Differences')
+plt.xlabel('Metric')
+plt.ylabel('Season')
+plt.show()

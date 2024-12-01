@@ -1,14 +1,22 @@
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import scipy.stats as stats
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
+import dash
+from dash import dcc, html
+from dash.dependencies import Input, Output
 from datetime import datetime
+import plotly.express as px
+import plotly.graph_objects as go
+import pandas as pd
+import numpy as np
+import scipy.stats as stats
+import io
+import base64
+import seaborn as sns
+import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.mixture import GaussianMixture
-from matplotlib.patches import Ellipse
+from scipy.stats import ttest_ind
 
+# Load and preprocess data (adjust paths as needed)
+# Assuming 'seasons_dict' and relevant data structures are already processed in your script.
 START_DATE = "2009-10-27" # First day filtering
 END_DATE = "2019-10-22" # Last day filtering
 
@@ -108,6 +116,8 @@ class TeamObject:
                 seasons_games.append(season_dict)
         
         return seasons_games
+    
+    
 # Teams in NBA based on dataset
 WESTERN_CONFERENCE_TEAMS = {'Portland Trail Blazers', 'Los Angeles Lakers', 'Dallas Mavericks', 'Golden State Warriors', 'Denver Nuggets', 'Los Angeles Clippers', 'San Antonio Spurs', 'Minnesota Timberwolves', 'Memphis Grizzlies', 'New Orleans Hornets', 'Phoenix Suns', 'Oklahoma City Thunder', 'Utah Jazz', 'Houston Rockets', 'Sacramento Kings', 'LA Clippers', 'New Orleans Pelicans'}
 EASTERN_CONFERENCE_TEAMS = {'Cleveland Cavaliers', 'Atlanta Hawks', 'Miami Heat', 'Boston Celtics',  'Orlando Magic', 'Toronto Raptors', 'Chicago Bulls', 'New Jersey Nets', 'Detroit Pistons', 'Charlotte Bobcats', 'Philadelphia 76ers', 'Indiana Pacers', 'Washington Wizards', 'New York Knicks', 'Milwaukee Bucks', 'Brooklyn Nets', 'Charlotte Hornets'}
@@ -236,9 +246,12 @@ for season, teams_data in seasons_dict.items():
         team_data['relative_offensive_rating'] = team_data['average_offensive_rating'] - mean_offensive_rating
         team_data['relative_defensive_rating'] = team_data['average_defensive_rating'] - mean_defensive_rating
 
-# Create violin plots
-def create_net_rating_violin_plots(seasons_dict):
-    # Prepare data for plotting
+# Prepare Dash app
+app = dash.Dash(__name__)
+app.title = "NBA Data Analysis Dashboard"
+
+# Data preprocessing for Plotly
+def prepare_violin_data(seasons_dict):
     plot_data = []
     for season, teams in seasons_dict.items():
         for team in teams:
@@ -247,223 +260,139 @@ def create_net_rating_violin_plots(seasons_dict):
                 'Conference': team['conference'],
                 'Net Rating': team['average_net_rating']
             })
-    
-    # Convert to DataFrame
-    df = pd.DataFrame(plot_data)
-    
-    # Create a figure with subplots
-    plt.figure(figsize=(20, 15))
-    
-    # Iterate through each season and create a subplot
-    for i, season in enumerate(sorted(seasons_dict.keys()), 1):
-        plt.subplot(3, 4, i)
-        
-        # Filter data for current season
-        season_data = df[df['Season'] == season]
-        
-        # Create violin plot
-        sns.violinplot(x='Conference', y='Net Rating', data=season_data)
-        
-        plt.title(f'Net Ratings - {season} Season')
-        plt.xlabel('Conference')
-        plt.ylabel('Net Rating')
-        plt.axhline(y=0, color='r', linestyle='--')
-    
-    # Adjust layout and save
-    plt.tight_layout()
-    plt.suptitle('NBA Net Ratings by Conference (2009-2019)', fontsize=16, y=1.02)
-    plt.savefig('nba_net_ratings_violin_plots.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    plt.close()
+    return pd.DataFrame(plot_data)
 
-# Run the plot generation
-create_net_rating_violin_plots(seasons_dict)
-
-def draw_ellipse(position, covariance, ax=None, **kwargs):
-    ax = ax or plt.gca()
-    if covariance.shape == (2, 2):
-        U, s, Vt = np.linalg.svd(covariance)
-        angle = np.degrees(np.arctan2(U[1, 0], U[0, 0]))
-        width, height = 2 * np.sqrt(s)
-    else:
-        angle = 0
-        width, height = 2 * np.sqrt(covariance)
-    
-    # Extract color from kwargs
-    color = kwargs.pop('color', None)
-    
-    for nsig in range(1, 4):
-        ellipse = Ellipse(
-            xy=position, 
-            width=nsig * width, 
-            height=nsig * height, 
-            angle=angle,
-            # Set color directly in Ellipse constructor
-            color=color,
-            # Apply any remaining kwargs
-            **kwargs
-        )
-        
-        ax.add_patch(ellipse)
-        
-def perform_gmm_clustering(seasons_dict):
-    # Aggregate data across all seasons
+def prepare_gmm_data(seasons_dict):
     all_teams_data = []
     for season, teams in seasons_dict.items():
-        # Add season information to each team
         for team in teams:
             team_data = team.copy()
             team_data['team'] = season + ' ' + team['team']
             all_teams_data.append(team_data)
-    
-    # Convert to DataFrame
+
     df = pd.DataFrame(all_teams_data)
-    
-    # Prepare data for clustering
+    #Invert defensive rating for better clustering
+    df['relative_defensive_rating'] = -df['relative_defensive_rating']
     X = df[['relative_offensive_rating', 'relative_defensive_rating']].copy()
-    
-    # Invert defensive rating (as lower is better for defense)
-    X['relative_defensive_rating'] = -X['relative_defensive_rating']
-    
-    # Standardize the features
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    
-    # Perform GMM clustering with more robust model selection
-    n_components_range = range(1, 7)
-    models = [GaussianMixture(n_components=n, random_state=42).fit(X_scaled) for n in n_components_range]
-    
-    # Calculate BIC and AIC
-    bic = [model.bic(X_scaled) for model in models]
-    aic = [model.aic(X_scaled) for model in models]
-    
-    # Select optimal number of clusters
-    optimal_clusters_bic = n_components_range[np.argmin(bic)]
-    optimal_clusters_aic = n_components_range[np.argmin(aic)]
-    
-    # Fit final GMM with BIC-selected clusters
-    gmm = GaussianMixture(n_components=optimal_clusters_bic, random_state=42)
+    gmm = GaussianMixture(n_components=3, random_state=42)
     gmm.fit(X_scaled)
-    
-    # Predict cluster labels
     labels = gmm.predict(X_scaled)
+    df['Cluster'] = labels
+    return df
     
-    # Create visualization
-    plt.figure(figsize=(16, 10))
-    
-    # Color and marker mapping
-    color_map = {'Western': 'blue', 'Eastern': 'red'}
-    
-    # Improved scatter plot with cluster coloring
-    for cluster in range(optimal_clusters_bic):
-        cluster_mask = (labels == cluster)
-        cluster_data = X[cluster_mask]
-        cluster_df = df[cluster_mask]
+def calculate_p_values(seasons_dict):
+    p_values = {}
+    for season, teams_data in seasons_dict.items():
+        west_data = [team for team in teams_data if team['conference'] == 'Western']
+        east_data = [team for team in teams_data if team['conference'] == 'Eastern']
         
-        plt.scatter(
-            cluster_data['relative_offensive_rating'], 
-            cluster_data['relative_defensive_rating'],
-            c=[color_map[conf] for conf in cluster_df['conference']],
-            marker='o',
-            alpha=0.7,
-            label=f'Cluster {cluster}',
-            edgecolors='black',
-            linewidth=1
-        )
-    
-    # Add team labels
-    for i in range(len(X)):
-        plt.annotate(
-            df.iloc[i]['team'], 
-            (X.iloc[i]['relative_offensive_rating'], X.iloc[i]['relative_defensive_rating']),
-            xytext=(5, 5),
-            textcoords='offset points',
-            fontsize=8,
-            alpha=0.7
-        )
-    
-    
-    # Plot cluster centers
-    cluster_centers = scaler.inverse_transform(gmm.means_)
-    colors = cm.rainbow(np.linspace(0, 1, optimal_clusters_bic))
-    
-    # In your plotting loop:
-    for i, (mean, covar) in enumerate(zip(gmm.means_, gmm.covariances_)):
-        if covar.shape == (2, 2):
-            draw_ellipse(mean, covar, alpha=0.2, color=colors[i])
-    
-    plt.scatter(
-        cluster_centers[:, 0], 
-        -cluster_centers[:, 1],  
-        c='green', 
-        s=300, 
-        alpha=0.8, 
-        marker='x',
-        label='Cluster Centers',
-        linewidth=2,
-        edgecolors='black'
+        p_values[season] = {
+            'Net Rating': stats.ttest_ind(
+                [team['average_net_rating'] for team in west_data],
+                [team['average_net_rating'] for team in east_data]
+            ).pvalue,
+            'Offensive Rating': stats.ttest_ind(
+                [team['average_offensive_rating'] for team in west_data],
+                [team['average_offensive_rating'] for team in east_data]
+            ).pvalue,
+            'Defensive Rating': stats.ttest_ind(
+                [team['average_defensive_rating'] for team in west_data],
+                [team['average_defensive_rating'] for team in east_data]
+            ).pvalue,
+        }
+    return pd.DataFrame(p_values).T
+
+# Generate p-value DataFrame
+p_value_df = calculate_p_values(seasons_dict)
+
+# Function to generate the Plotly heatmap
+def generate_heatmap(p_value_df):
+    # Melt DataFrame to long format for Plotly
+    heatmap_data = p_value_df.reset_index().melt(id_vars='index', var_name='Metric', value_name='p-value')
+    heatmap_data.rename(columns={'index': 'Season'}, inplace=True)
+
+    # Create heatmap using Plotly Express
+    fig = px.imshow(
+        p_value_df.values,
+        labels={"x": "Metric", "y": "Season", "color": "p-value"},
+        x=p_value_df.columns,
+        y=p_value_df.index,
+        color_continuous_scale='YlOrRd_r',
+        text_auto='.3f'
     )
     
-    plt.title(f'NBA Teams Clustering\nGMM with {optimal_clusters_bic} Clusters (BIC)', fontsize=16)
-    plt.xlabel('Offensive Rating', fontsize=12)
-    plt.ylabel('Defensive Rating (Inverted)', fontsize=12)
-    plt.legend(title='Clusters', loc='best')
-    plt.grid(True, linestyle='--', alpha=0.5)
+    fig.update_layout(
+        title="Statistical Significance of Conference Differences",
+        xaxis_title="Metric",
+        yaxis_title="Season",
+        coloraxis_colorbar=dict(title="p-value"),
+    )
     
-    plt.tight_layout()
-    plt.savefig('nba_gmm_clustering.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    plt.close()
+    # Annotate heatmap with p-values
+    fig.update_traces(texttemplate='%{text}', text=heatmap_data['p-value'].round(3))
     
-    # Detailed cluster analysis
-    print(f"Optimal number of clusters (BIC): {optimal_clusters_bic}")
-    print(f"Optimal number of clusters (AIC): {optimal_clusters_aic}")
-    
-    print("\nDetailed Cluster Centers:")
-    for i, center in enumerate(cluster_centers):
-        cluster_teams = df[labels == i]
-        print(f"\nCluster {i}:")
-        print(f"  Center - Offensive Rating: {center[0]:.2f}, Defensive Rating: {-center[1]:.2f}")
-        print("  Teams:")
-        for _, team in cluster_teams.iterrows():
-            print(f"    {team['team']} ({team['conference']} Conference)")
-        print(f"  Cluster Size: {len(cluster_teams)} teams")
-    
-    # Return additional information
-    return {
-        'labels': labels,
-        'centers': cluster_centers,
-        'optimal_clusters_bic': optimal_clusters_bic,
-        'optimal_clusters_aic': optimal_clusters_aic
-    }
+    return fig
 
-# Assuming seasons_dict is already defined
-# Run the clustering analysis
-cluster_results = perform_gmm_clustering(seasons_dict)
+# Data for Dash
+violin_data = prepare_violin_data(seasons_dict)
+gmm_data = prepare_gmm_data(seasons_dict)
 
-# Perform t-tests for each season and metric
-p_values = {}
-for season, teams_data in seasons_dict.items():
-    west_data = [team for team in teams_data if team['conference'] == 'Western']
-    east_data = [team for team in teams_data if team['conference'] == 'Eastern']
-    
-    p_values[season] = {
-        'Net Rating': stats.ttest_ind([team['average_net_rating'] for team in west_data],
-                                      [team['average_net_rating'] for team in east_data]).pvalue,
-        'Offensive Rating': stats.ttest_ind([team['average_offensive_rating'] for team in west_data],
-                                            [team['average_offensive_rating'] for team in east_data]).pvalue,
-        'Defensive Rating': stats.ttest_ind([team['average_defensive_rating'] for team in west_data],
-                                            [team['average_defensive_rating'] for team in east_data]).pvalue
-    }
+# Layout
+app.layout = html.Div([
+    html.H1("NBA Data Analysis Dashboard", style={'textAlign': 'center'}),
+    dcc.Tabs([
+        dcc.Tab(label='Violin Plots', children=[
+            html.H3("Net Ratings by Conference (2009-2019)", style={'textAlign': 'center'}),
+            dcc.Dropdown(
+                id='season-dropdown',
+                options=[{'label': season, 'value': season} for season in violin_data['Season'].unique()],
+                value=violin_data['Season'].unique()[0],
+                clearable=False
+            ),
+            dcc.Graph(id='violin-plot')
+        ]),
+        dcc.Tab(label='GMM Clustering', children=[
+            html.H3("Clustering of Teams Based on Ratings", style={'textAlign': 'center'}),
+            dcc.Graph(
+                id='gmm-clustering',
+                figure=px.scatter(
+                    gmm_data, x='relative_offensive_rating', y='relative_defensive_rating',
+                    color='Cluster', symbol='conference', hover_name='team',
+                    labels={
+                        'relative_offensive_rating': 'Relative Offensive Rating',
+                        'relative_defensive_rating': 'Relative Defensive Rating (Inverted)'
+                    },
+                    title="GMM Clustering"
+                )
+            )
+        ]),
+         dcc.Tab(label='P-Value Heatmap by Season', children=[
+            html.H3("P-Value Heatmap", style={'textAlign': 'center'}),
+            dcc.Graph(
+                id='p-value-heatmap',
+                figure=generate_heatmap(p_value_df)  # Initial heatmap
+         )])
+    ])
+])
 
-# Create a DataFrame from p_values
-p_value_df = pd.DataFrame(p_values).T
 
-# Create a heatmap of p-values
-plt.figure(figsize=(12, 6))
-sns.heatmap(p_value_df, cmap='YlOrRd_r', annot=True, fmt='.3f', 
-            cbar_kws={'label': 'p-value'})
-plt.title('Statistical Significance of Conference Differences')
-plt.xlabel('Metric')
-plt.ylabel('Season')
-plt.show()
+# Callbacks
+@app.callback(
+    Output('violin-plot', 'figure'),
+    Input('season-dropdown', 'value')
+)
+def update_violin_plot(selected_season):
+    filtered_data = violin_data[violin_data['Season'] == selected_season]
+    fig = px.violin(
+        filtered_data, x='Conference', y='Net Rating',
+        color='Conference', box=True, points='all',
+        title=f"Net Ratings by Conference for {selected_season}"
+    )
+    fig.update_layout(violinmode='group')
+    return fig
+
+# Run the app
+if __name__ == '__main__':
+    app.run_server(debug=True)
